@@ -605,11 +605,12 @@ function AccountSummary({ data }: { data: CreditReportData }) {
   );
 }
 
-// Column widths for the accounts table (in points, total ≈ page width − 2×40 margins = 515)
+// Column widths for the accounts table (in points, total ~= page width - 2x40 margins = 515)
 const COL = {
-  creditor: 110,
-  type: 90,
-  status: 65,
+  creditor: 105,
+  accountNumber: 54,
+  type: 78,
+  status: 61,
   opened: 50,
   balance: 48,
   limit: 48,
@@ -618,6 +619,11 @@ const COL = {
 
 function AccountsTable({ data }: { data: CreditReportData }) {
   const allAccounts = data.accounts;
+  const formatAccountNumber = (value: string | null | undefined) => {
+    const trimmed = (value || "").trim();
+    return trimmed && !/^n\/?a$/i.test(trimmed) ? trimmed : "-";
+  };
+
   return (
     <View style={s.card}>
       <Text style={s.cardTitle}>All Accounts</Text>
@@ -625,6 +631,7 @@ function AccountsTable({ data }: { data: CreditReportData }) {
       {/* Header row */}
       <View style={s.tableHeader}>
         <Text style={[s.tableHeaderText, { width: COL.creditor }]}>Account</Text>
+        <Text style={[s.tableHeaderText, { width: COL.accountNumber }]}>Acct #</Text>
         <Text style={[s.tableHeaderText, { width: COL.type }]}>Type</Text>
         <Text style={[s.tableHeaderText, { width: COL.status }]}>Status</Text>
         <Text style={[s.tableHeaderText, { width: COL.opened }]}>Opened</Text>
@@ -664,12 +671,10 @@ function AccountsTable({ data }: { data: CreditReportData }) {
               <Text style={[s.tableCell, isDero ? { color: C.red } : {}]}>
                 {acc.creditorName}
               </Text>
-              {acc.accountNumberMasked ? (
-                <Text style={[s.tableCellMuted, { fontSize: 6.5 }]}>
-                  ••••{acc.accountNumberMasked.slice(-4)}
-                </Text>
-              ) : null}
             </View>
+            <Text style={[s.tableCellMuted, { width: COL.accountNumber }]}>
+              {formatAccountNumber(acc.accountNumberMasked)}
+            </Text>
             <Text style={[s.tableCellMuted, { width: COL.type }]}>
               {acc.accountType}
             </Text>
