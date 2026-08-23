@@ -17,6 +17,11 @@ import {
   computeAccountAgeMonths,
   assessExtractedTextQuality,
   assessExtractionYield,
+  extractActualPublicRecordCount,
+  extractDeterministicAccountsFromText,
+  hasUsableAccountNumber,
+  maskAccountNumber,
+  normalizeNameKey,
 } from "./extraction";
 import {
   computeAccountSummary,
@@ -269,6 +274,54 @@ function applyLatePaymentLookbackRule(account: CreditAccount, reportDate: string
   };
 }
 
+function mergeDeterministicAccountInputs(aiAccounts: any[], deterministicAccounts: CreditAccount[]): any[] {
+  const merged = Array.isArray(aiAccounts) ? [...aiAccounts] : [];
+
+  for (const deterministicAccount of deterministicAccounts) {
+    const deterministicNameKey = normalizeNameKey(deterministicAccount.creditorName);
+    const deterministicNumber = maskAccountNumber(deterministicAccount.accountNumberMasked);
+    const existingIndex = merged.findIndex(account => {
+      const accountNameKey = normalizeNameKey(String(account?.creditorName || account?.accountName || ""));
+      const accountNumber = maskAccountNumber(account?.accountNumberMasked || "");
+
+      if (hasUsableAccountNumber(deterministicNumber) && hasUsableAccountNumber(accountNumber)) {
+        return accountNumber === deterministicNumber && (
+          !accountNameKey ||
+          accountNameKey === deterministicNameKey ||
+          accountNameKey.includes(deterministicNameKey) ||
+          deterministicNameKey.includes(accountNameKey)
+        );
+      }
+
+      return accountNameKey === deterministicNameKey && deterministicNameKey.length > 0;
+    });
+
+    if (existingIndex === -1) {
+      merged.push(deterministicAccount);
+      continue;
+    }
+
+    const existing = merged[existingIndex];
+    merged[existingIndex] = {
+      ...existing,
+      ...deterministicAccount,
+      currentBalance: deterministicAccount.currentBalance ?? existing.currentBalance ?? null,
+      creditLimitOrOriginalAmount: deterministicAccount.creditLimitOrOriginalAmount ?? existing.creditLimitOrOriginalAmount ?? null,
+      monthlyPayment: deterministicAccount.monthlyPayment ?? existing.monthlyPayment ?? null,
+      pastDueAmount: deterministicAccount.pastDueAmount ?? existing.pastDueAmount ?? null,
+      dateOpened: deterministicAccount.dateOpened ?? existing.dateOpened ?? null,
+      accountAgeMonths: deterministicAccount.accountAgeMonths ?? existing.accountAgeMonths ?? null,
+      bureausReporting: Array.from(new Set([...(existing.bureausReporting || []), ...deterministicAccount.bureausReporting])),
+      latePaymentsLast24Months: deterministicAccount.latePaymentsLast24Months,
+      lateHistoryNotes: deterministicAccount.lateHistoryNotes,
+      isDerogatory: deterministicAccount.isDerogatory,
+      includedInBankruptcy: deterministicAccount.includedInBankruptcy,
+    };
+  }
+
+  return merged;
+}
+
 /**
  * Given raw applicant/business/accounts/inquiries data (either freshly extracted
  * or coach-corrected), deterministically recompute every derived field. This is
@@ -282,6 +335,7 @@ function buildCreditReportData(input: {
   businessAgeInput: string | null;
   clientRequests?: string | null;
   businessInformation?: string | null;
+  actualPublicRecordCount?: number | null;
   rawAccounts: any[];
   inquiries: any;
   isReviewedAccounts?: boolean;
@@ -293,6 +347,7 @@ function buildCreditReportData(input: {
     businessAgeInput,
     clientRequests,
     businessInformation,
+    actualPublicRecordCount,
     rawAccounts,
     inquiries,
     isReviewedAccounts,
@@ -334,6 +389,15 @@ function buildCreditReportData(input: {
 
   accounts = accounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate));
   reviewAccounts = reviewAccounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate));
+
+  if (actualPublicRecordCount === 0) {
+    accounts = accounts
+      .filter((account: any) => account.accountType !== "Bankruptcy Public Record")
+      .map((account: any) => ({ ...account, includedInBankruptcy: false }));
+    reviewAccounts = reviewAccounts
+      .filter((account: any) => account.accountType !== "Bankruptcy Public Record")
+      .map((account: any) => ({ ...account, includedInBankruptcy: false }));
+  }
 
   const inquiriesSummary = {
     items: Array.isArray(inquiries?.items) ? inquiries.items : [],
@@ -432,6 +496,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // 2. AI extraction of the structured data model (facts only, no scoring)
       const extraction = await extractCreditReportData(extractedText);
+      const deterministicAccounts = extractDeterministicAccountsFromText(extractedText, reportDate);
+      const actualPublicRecordCount = extractActualPublicRecordCount(extractedText);
+      console.log(`[Extraction] Deterministic parser found ${deterministicAccounts.length} account rows.`);
 
       // 3. Build the full structured data model with deterministic scoring
       const reportData = buildCreditReportData({
@@ -441,7 +508,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         businessAgeInput: businessAgeInput || null,
         clientRequests: clientRequests || null,
         businessInformation: businessInformation || null,
-        rawAccounts: extraction.accounts || [],
+        actualPublicRecordCount,
+        rawAccounts: mergeDeterministicAccountInputs(extraction.accounts || [], deterministicAccounts),
         inquiries: extraction.inquiries || {},
       });
 
@@ -494,6 +562,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         businessAgeInput: business.businessAgeInput,
         clientRequests: business.clientRequests,
         businessInformation: business.businessInformation,
+        actualPublicRecordCount: extractActualPublicRecordCount(existing.extractedText || ""),
         rawAccounts: accounts,
         inquiries,
         isReviewedAccounts: true,
@@ -554,6 +623,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // Re-run AI extraction against the stored text
       const extraction = await extractCreditReportData(existing.extractedText);
+      const deterministicAccounts = extractDeterministicAccountsFromText(existing.extractedText, existing.reportDate);
+      const actualPublicRecordCount = extractActualPublicRecordCount(existing.extractedText);
+      console.log(`[Re-extraction] Deterministic parser found ${deterministicAccounts.length} account rows for report ${existing.id}.`);
 
       // Rebuild the full structured data model
       const existingData = existing.reportData as any;
@@ -564,7 +636,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         businessAgeInput: existingData?.business?.businessAgeInput ?? null,
         clientRequests: existingData?.business?.clientRequests ?? null,
         businessInformation: existingData?.business?.businessInformation ?? null,
-        rawAccounts: extraction.accounts || [],
+        actualPublicRecordCount,
+        rawAccounts: mergeDeterministicAccountInputs(extraction.accounts || [], deterministicAccounts),
         inquiries: extraction.inquiries || {},
       });
 

@@ -76,16 +76,38 @@ export function isJunkAccountName(name: string): boolean {
 export function maskAccountNumber(raw: string | null | undefined): string {
   if (!raw) return "";
   const cleaned = raw.replace(/\s+/g, "").replace(/^[#:]+|[#:]+$/g, "");
-  const digits = cleaned.replace(/\D/g, "");
+  const visible = cleaned.replace(/^[xX*#•-]+/, "");
+  const valueToMask = visible || cleaned;
+  const digits = valueToMask.replace(/\D/g, "");
   if (digits.length >= 4) return `****${digits.slice(-4)}`;
-  const alnum = cleaned.replace(/[^A-Za-z0-9]/g, "");
+  const alnum = valueToMask.replace(/[^A-Za-z0-9]/g, "");
   if (alnum.length >= 4) return `****${alnum.slice(-4)}`;
-  return cleaned;
+  if (alnum.length >= 2 && /[xX*#•-]/.test(cleaned)) return `****${alnum}`;
+  return valueToMask;
 }
 
 export function hasUsableAccountNumber(accountNumber: string | null | undefined): boolean {
+  const raw = (accountNumber || "").trim();
+  if (
+    !raw ||
+    /^n\/?a$/i.test(raw) ||
+    /^\(?\d{3}\)?[-\s]?\d{3}[-\s]?\d{4}$/.test(raw) ||
+    /^\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?$/.test(raw) ||
+    /^\d{1,2}[-/]\d{4}$/.test(raw) ||
+    /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(raw)
+  ) {
+    return false;
+  }
+
   const normalized = maskAccountNumber(accountNumber || "");
-  return Boolean(normalized && /[\d*#•]/.test(normalized) && normalized.replace(/\D/g, "").length >= 4);
+  const visible = normalized.replace(/^[*#•xX-]+/, "").replace(/[^A-Za-z0-9]/g, "");
+  return Boolean(
+    normalized &&
+    !/^n\/?a$/i.test(normalized) &&
+    visible.length >= 2 &&
+    /[A-Za-z0-9]/.test(visible) &&
+    (visible.replace(/\D/g, "").length >= 2 || /[A-Za-z]/.test(visible))
+  );
 }
 
 const KNOWN_COMPANY_PATTERN = /portfolio recovery|midland credit|lvnv funding|convergent|enhanced recovery|ic system|credence|radius global|national credit|allied interstate|progressive|credit corp|receivables|asset acceptance|cavalry|cach|first premier|jefferson capital|encore capital|unifin|transworld|credit collection|collection bureau|capital one|chase|discover|american express|amex|citi|wells fargo|bank of america|synchrony|barclays|us bank|navy federal|toyota|honda|ford|nissan|carmax|santander|ally financial|carvana|sofi|upstart|avant|credit acceptance|nelnet|navient|great lakes|sallie mae|mohela|rocket mortgage|quicken loans|penfed|regions bank|pnc bank|truist|kovo|self financial|credit strong|extraordinary credit|agency|associates|financial|services|solutions|capital|funding|recovery|management|bank|credit union/i;
@@ -208,6 +230,281 @@ export function computeAccountAgeMonths(dateOpened: string | null, reportDate: s
   if (Number.isNaN(opened.getTime()) || Number.isNaN(asOf.getTime())) return fallback;
   const months = (asOf.getFullYear() - opened.getFullYear()) * 12 + (asOf.getMonth() - opened.getMonth());
   return months >= 0 ? months : fallback;
+}
+
+function cleanSectionAccountName(rawName: string): string {
+  return rawName
+    .replace(/\s+\d+$/, "")
+    .replace(/\s*\(CLOSED\)\s*$/i, "")
+    .replace(/[,\s]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function chooseBestAccountNumber(raw: string): string {
+  const candidates: string[] = [];
+  const accountPattern = /(?:[#*Xx•-]+\s*)+[A-Za-z0-9]{2,}|(?:[#*Xx•-]+\s*)?\d{4,}/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = accountPattern.exec(raw)) !== null) {
+    const candidate = maskAccountNumber(match[0]);
+    if (hasUsableAccountNumber(candidate)) candidates.push(candidate);
+  }
+
+  if (candidates.length === 0) return "";
+
+  const counts = new Map<string, number>();
+  for (const candidate of candidates) {
+    counts.set(candidate, (counts.get(candidate) || 0) + 1);
+  }
+
+  return candidates.reduce((best, candidate) => {
+    const bestCount = counts.get(best) || 0;
+    const candidateCount = counts.get(candidate) || 0;
+    return candidateCount > bestCount ? candidate : best;
+  }, candidates[0]);
+}
+
+function extractAccountNumberFromText(rawBlock: string): string {
+  const lines = rawBlock.split("\n").map(line => line.trim()).filter(Boolean);
+  const labeledAccountPattern = /(?:account\s*(?:number|#|num|no\.?)|acct\s*(?:#|num|no\.?|number)?|case\s*(?:number|#))\s*[:#\-–]?\s*(.+)$/i;
+
+  for (const line of lines) {
+    if (/account\s+name/i.test(line)) continue;
+    const labeledMatch = line.match(labeledAccountPattern);
+    if (labeledMatch) {
+      const masked = chooseBestAccountNumber(labeledMatch[1]);
+      if (hasUsableAccountNumber(masked)) return masked;
+    }
+  }
+
+  return chooseBestAccountNumber(rawBlock);
+}
+
+function parseMoney(value: string): number | null {
+  const match = value.match(/\$?(-?[\d,]+(?:\.\d{1,2})?)/);
+  if (!match) return null;
+  const parsed = Number(match[1].replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function extractMoneyFromLine(blockText: string, labelPattern: RegExp): number | null {
+  const line = blockText.split("\n").find(l => labelPattern.test(l));
+  if (!line) return null;
+  const values = line.replace(labelPattern, "").match(/\$[\d,]+(?:\.\d{1,2})?|(?:^|\s)(?:N\/A|NA|\d[\d,]*(?:\.\d{1,2})?)(?=\s|$)/gi) || [];
+  const moneyValues = values
+    .map(v => parseMoney(v))
+    .filter((v): v is number => typeof v === "number");
+  return moneyValues.find(v => v > 0) ?? moneyValues[0] ?? null;
+}
+
+function hasPositiveMoneyValue(values: string): boolean {
+  const moneyMatches = values.match(/\$[\d,]+/g) || [];
+  return moneyMatches.some(value => Number(value.replace(/[$,]/g, "")) > 0);
+}
+
+function inferDeterministicAccountType(sectionNumber: string, blockText: string): CreditAccount["accountType"] {
+  const lines = blockText.split("\n");
+  const chargeOffLine = lines.find(line => /^charge\s*off\s+amount\b/i.test(line));
+  const statusLines = lines.filter(line => /^(?:account\s+status|status)\b/i.test(line) && !/^status\s+date\b/i.test(line));
+  const loanTypeLine = lines.find(line => /^loan\s+type\b/i.test(line)) || "";
+
+  if (
+    (chargeOffLine && hasPositiveMoneyValue(chargeOffLine)) ||
+    /\b(?:charged\s+off|charge[\s-]?off\s+account|account\s+charged\s+to\s+profit\s+and\s+loss|unpaid\s+balance\s+reported\s+as\s+a\s+loss)\b/i.test(blockText)
+  ) {
+    return "Charge-Off";
+  }
+
+  if (
+    statusLines.some(line => /collection/i.test(line)) ||
+    /\bcollection account\b/i.test(blockText) && /-\s*collection account\b/i.test(blockText)
+  ) {
+    return "Collection";
+  }
+
+  if (/mortgage|real\s+estate/i.test(loanTypeLine) || sectionNumber === "3") return "Mortgage";
+  if (/auto|vehicle|lease/i.test(loanTypeLine)) return "Auto Loan";
+  if (/student|education|dept\s+of\s+ed|aidvantage/i.test(`${loanTypeLine}\n${blockText}`)) return "Student Loan";
+  if (/personal/i.test(loanTypeLine)) return "Personal Loan";
+  if (/credit\s*builder|self|kikoff/i.test(`${loanTypeLine}\n${blockText}`)) return "Credit Builder";
+  if (/charge\s+card/i.test(loanTypeLine)) return "Charge Card";
+  if (/revolving|credit\s*card|bankcard/i.test(loanTypeLine) || sectionNumber === "2") return "Revolving Credit Card";
+  if (sectionNumber === "4") return "Installment Loan";
+
+  return "Other";
+}
+
+function inferOpenClosed(headerText: string, blockText: string): CreditAccount["openClosed"] {
+  if (/\(closed\)|\bclosed\b/i.test(headerText)) return "Closed";
+  const accountStatusLine = blockText.split("\n").find(line => /^account\s+status\b/i.test(line)) || "";
+  if (/\bclosed\b/i.test(accountStatusLine)) return "Closed";
+  if (/\bopen\b/i.test(accountStatusLine)) return "Open";
+  return "Unknown";
+}
+
+function extractDateOpened(blockText: string): string | null {
+  const line = blockText.split("\n").find(l => /^date\s+opened\b/i.test(l));
+  if (!line) return null;
+  const dateMatch =
+    line.match(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i) ||
+    line.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/) ||
+    line.match(/\b\d{4}-\d{1,2}-\d{1,2}\b/);
+  return dateMatch ? dateMatch[0] : null;
+}
+
+function extractAccountStatus(blockText: string): string {
+  const statusLine = blockText
+    .split("\n")
+    .find(line => /^(?:account\s+status|status)\b/i.test(line) && !/^status\s+date\b/i.test(line));
+  if (!statusLine) return "Unknown";
+  return statusLine.replace(/^(?:account\s+status|status)\s*/i, "").trim() || "Unknown";
+}
+
+function inferRecentLatePaymentCount(blockText: string): { count: number; notes: string | null } {
+  const statusLines = blockText
+    .split("\n")
+    .filter(line => /^(?:account\s+status|status)\b/i.test(line) && !/^status\s+date\b/i.test(line));
+
+  if (
+    statusLines.some(line => /\b(?:late|past\s+due|delinquent)\b/i.test(line)) ||
+    /\baccount\s+delinquent\b/i.test(blockText)
+  ) {
+    return { count: 1, notes: "Current account status/comment indicates late or past-due reporting." };
+  }
+
+  return { count: 0, notes: null };
+}
+
+function inferBureausReporting(blockText: string): Bureau[] {
+  const firstLines = blockText.split("\n").slice(0, 8).join("\n");
+  const bureaus: Bureau[] = [];
+  if (/experian/i.test(firstLines) || /experian/i.test(blockText)) bureaus.push("Experian");
+  if (/equifax/i.test(firstLines) || /equifax/i.test(blockText)) bureaus.push("Equifax");
+  if (/transunion|trans\s*union/i.test(firstLines) || /transunion|trans\s*union/i.test(blockText)) bureaus.push("TransUnion");
+  return bureaus.length > 0 ? bureaus : ["Experian"];
+}
+
+function buildDeterministicAccount(raw: {
+  sectionNumber: string;
+  accountName: string;
+  headerText: string;
+  blockText: string;
+  reportDate: string;
+}): CreditAccount | null {
+  const accountName = cleanSectionAccountName(raw.accountName);
+  if (isJunkAccountName(accountName) || scoreCompanyName(accountName) < 0) return null;
+
+  const accountNumberMasked = extractAccountNumberFromText(raw.blockText);
+  if (!hasUsableAccountNumber(accountNumberMasked)) return null;
+
+  const accountType = inferDeterministicAccountType(raw.sectionNumber, raw.blockText);
+  const dateOpened = extractDateOpened(raw.blockText);
+  const latePayment = inferRecentLatePaymentCount(raw.blockText);
+  const creditLimitOrOriginalAmount =
+    extractMoneyFromLine(raw.blockText, /^credit\s+limit\b/i) ??
+    extractMoneyFromLine(raw.blockText, /^(?:original\s+amount|high\s+credit|highest\s+balance)\b/i);
+
+  const account: CreditAccount = {
+    id: randomUUID(),
+    creditorName: accountName,
+    accountNumberMasked,
+    accountType,
+    accountStatus: extractAccountStatus(raw.blockText),
+    openClosed: inferOpenClosed(raw.headerText, raw.blockText),
+    dateOpened,
+    accountAgeMonths: computeAccountAgeMonths(dateOpened, raw.reportDate, null),
+    currentBalance: extractMoneyFromLine(raw.blockText, /^(?:reported\s+)?balance\b/i),
+    creditLimitOrOriginalAmount,
+    monthlyPayment: extractMoneyFromLine(raw.blockText, /^monthly\s+payment(?:\s+amount)?\b/i),
+    pastDueAmount: extractMoneyFromLine(raw.blockText, /^amount\s+past\s+due\b/i),
+    paymentStatus: extractAccountStatus(raw.blockText),
+    latePaymentsLast24Months: latePayment.count,
+    lateHistoryNotes: latePayment.notes,
+    bureausReporting: inferBureausReporting(raw.blockText),
+    isDerogatory: ["Collection", "Charge-Off", "Bankruptcy Public Record"].includes(accountType) || latePayment.count > 0,
+    includedInBankruptcy: false,
+    confidence: 100,
+  };
+
+  return account;
+}
+
+export function extractDeterministicAccountsFromText(text: string, reportDate: string): CreditAccount[] {
+  const lines = text.split("\n").map(line => line.trim()).filter(Boolean);
+  const accounts: CreditAccount[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const headerMatch = lines[i].match(/^([2345])\.\d+\s+(.+?)(?:\s+\d+)?$/);
+    if (!headerMatch) continue;
+
+    const blockLines: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^[2345]\.\d+\s+/.test(lines[j]) || /^(?:6|7|8|9|10|11|12)\.\s+/.test(lines[j])) break;
+      blockLines.push(lines[j]);
+    }
+
+    const blockText = blockLines.join("\n");
+    if (!/account\s+number/i.test(blockText)) continue;
+
+    const account = buildDeterministicAccount({
+      sectionNumber: headerMatch[1],
+      accountName: headerMatch[2],
+      headerText: lines[i],
+      blockText,
+      reportDate,
+    });
+    if (!account) continue;
+
+    accounts.push(account);
+  }
+
+  const deduped: CreditAccount[] = [];
+  for (const account of accounts) {
+    const nameKey = normalizeNameKey(account.creditorName);
+    const numberKey = maskAccountNumber(account.accountNumberMasked);
+    const existing = deduped.find(candidate =>
+      normalizeNameKey(candidate.creditorName) === nameKey &&
+      maskAccountNumber(candidate.accountNumberMasked) === numberKey
+    );
+
+    if (!existing) {
+      deduped.push(account);
+      continue;
+    }
+
+    if (existing.accountType !== "Charge-Off" && account.accountType === "Charge-Off") {
+      existing.accountType = account.accountType;
+      existing.isDerogatory = true;
+    }
+    if (existing.latePaymentsLast24Months < account.latePaymentsLast24Months) {
+      existing.latePaymentsLast24Months = account.latePaymentsLast24Months;
+      existing.lateHistoryNotes = account.lateHistoryNotes;
+    }
+    const bureaus = new Set([...existing.bureausReporting, ...account.bureausReporting]);
+    existing.bureausReporting = Array.from(bureaus);
+  }
+
+  return deduped;
+}
+
+export function extractActualPublicRecordCount(text: string): number | null {
+  const summaryMatch = text.match(/\bPublic Records\s+(\d+)\s+(\d+)\s+(\d+)\b/i);
+  if (summaryMatch) {
+    return summaryMatch
+      .slice(1)
+      .reduce((total, value) => total + Number(value || 0), 0);
+  }
+
+  const publicRecordsSection = text.match(/10\.\s+Public Records([\s\S]*?)(?:11\.\s+Collections|12\.\s+|$)/i)?.[1] || "";
+  if (!publicRecordsSection) return null;
+  if (/currently have no bankruptcies/i.test(publicRecordsSection)) return 0;
+
+  const courtRecordMatches = publicRecordsSection.match(
+    /\b(?:chapter\s*(?:7|13)|bk(?:7|13)|u\.?s\.?\s*bankruptcy\s*court|court\s*record|tax\s*lien|civil\s*judgment|case\s*(?:number|#))/gi
+  ) || [];
+
+  return courtRecordMatches.length;
 }
 
 // ============================================================================
