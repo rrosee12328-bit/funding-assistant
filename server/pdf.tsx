@@ -502,6 +502,47 @@ function StrengthsBarriers({ data }: { data: CreditReportData }) {
   );
 }
 
+function FundingOptionsNotes({ data }: { data: CreditReportData }) {
+  const fundingOptionsNotes = data.readiness.fundingOptionsNotes ?? [];
+  if (fundingOptionsNotes.length === 0) return null;
+
+  return (
+    <View style={[s.card, { borderColor: C.primary, borderWidth: 1.5 }]}>
+      <Text style={[s.cardTitle, { color: C.primary }]}>Funding Options Notes</Text>
+      {fundingOptionsNotes.map((note, i) => (
+        <View key={i} style={s.bulletRow}>
+          <Text style={[s.bulletDot, { color: C.primary }]}>•</Text>
+          <Text style={s.bulletText}>{note}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function BusinessContext({ data }: { data: CreditReportData }) {
+  const clientRequests = data.business.clientRequests ?? null;
+  const businessInformation = data.business.businessInformation ?? null;
+  if (!clientRequests && !businessInformation) return null;
+
+  return (
+    <View style={s.card}>
+      <Text style={s.cardTitle}>Client & Business Context</Text>
+      {clientRequests ? (
+        <View style={{ marginBottom: 8 }}>
+          <Text style={s.catName}>Client Requests</Text>
+          <Text style={s.catDetail}>{clientRequests}</Text>
+        </View>
+      ) : null}
+      {businessInformation ? (
+        <View>
+          <Text style={s.catName}>Business Information</Text>
+          <Text style={s.catDetail}>{businessInformation}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function DebtSummary({ data }: { data: CreditReportData }) {
   const ds = data.debtSummary;
   const rows: [string, string][] = [
@@ -738,6 +779,8 @@ function AssessmentDocument({ data, coachNotes }: { data: CreditReportData; coac
       <Page size="A4" style={s.page}>
         <Header data={data} />
         <StrengthsBarriers data={data} />
+        <FundingOptionsNotes data={data} />
+        <BusinessContext data={data} />
         <AccountsTable data={data} />
         {coachNotes ? <CoachNotes notes={coachNotes} /> : null}
         <Disclaimer clientName={data.applicant.clientName} />

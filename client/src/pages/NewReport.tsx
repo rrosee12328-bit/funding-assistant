@@ -69,6 +69,12 @@ export default function NewReport() {
     if (data.businessAgeInput) {
       formData.append("businessAgeInput", data.businessAgeInput);
     }
+    if (data.clientRequests) {
+      formData.append("clientRequests", data.clientRequests);
+    }
+    if (data.businessInformation) {
+      formData.append("businessInformation", data.businessInformation);
+    }
 
     console.log("[Frontend] Submitting form with file:", file.name, file.type, file.size);
 
@@ -143,6 +149,26 @@ export default function NewReport() {
                   {...form.register("coachNotes")}
                   placeholder="Any specific context about this client..."
                   className="bg-background/50 border-white/10 focus:border-primary h-32"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="clientRequests">Client Requests (Optional)</Label>
+                <Textarea
+                  id="clientRequests"
+                  {...form.register("clientRequests")}
+                  placeholder="What funding amount, timeline, product type, or outcome is the client asking for?"
+                  className="bg-background/50 border-white/10 focus:border-primary h-28"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="businessInformation">Business Information (Optional)</Label>
+                <Textarea
+                  id="businessInformation"
+                  {...form.register("businessInformation")}
+                  placeholder="Business type, revenue, industry, entity status, bank statements, or other context for underwriting."
+                  className="bg-background/50 border-white/10 focus:border-primary h-28"
                 />
               </div>
 

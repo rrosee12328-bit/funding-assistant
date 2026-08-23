@@ -50,6 +50,9 @@ export default function ReportDetails() {
   }
 
   const data = report.reportData as unknown as CreditReportData;
+  const fundingOptionsNotes = data.readiness.fundingOptionsNotes ?? [];
+  const clientRequests = data.business.clientRequests ?? null;
+  const businessInformation = data.business.businessInformation ?? null;
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-in pb-20">
@@ -138,6 +141,18 @@ export default function ReportDetails() {
             </Card>
           </div>
 
+          {/* Funding Options Notes */}
+          {fundingOptionsNotes.length > 0 && (
+            <Card className="glass-card p-6 border-primary/20">
+              <h3 className="font-bold text-lg mb-4 text-primary">Funding Options Notes</h3>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                {fundingOptionsNotes.map((note, i) => (
+                  <li key={i} className="flex gap-2"><span className="text-primary shrink-0">•</span>{note}</li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
           {/* All Accounts */}
           <Card className="glass-card p-8">
             <h2 className="font-display font-bold text-2xl mb-6">All Accounts</h2>
@@ -221,6 +236,26 @@ export default function ReportDetails() {
               <SummaryRow label="Business Age" value={data.business.businessAgeMonths !== null ? `${data.business.businessAgeMonths} months` : "Unknown"} />
             </div>
           </Card>
+
+          {(clientRequests || businessInformation) && (
+            <Card className="glass-card p-6">
+              <h3 className="font-bold text-lg mb-4">Client & Business Context</h3>
+              <div className="space-y-4 text-sm">
+                {clientRequests && (
+                  <div>
+                    <div className="font-medium text-foreground mb-1">Client Requests</div>
+                    <p className="text-muted-foreground whitespace-pre-wrap leading-relaxed">{clientRequests}</p>
+                  </div>
+                )}
+                {businessInformation && (
+                  <div>
+                    <div className="font-medium text-foreground mb-1">Business Information</div>
+                    <p className="text-muted-foreground whitespace-pre-wrap leading-relaxed">{businessInformation}</p>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
 
           <Card className="glass-card p-6">
             <h3 className="font-bold text-lg mb-4 flex items-center gap-2">

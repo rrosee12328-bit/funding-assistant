@@ -5,6 +5,7 @@ import { api } from "@shared/routes";
 import {
   finalizeReportSchema,
   processReportSchema,
+  type CreditAccount,
   type CreditReportData,
 } from "@shared/schema";
 import multer from "multer";
@@ -105,6 +106,8 @@ General rules:
 - Do NOT include bureau headers, generic column labels ("Account Name", "Status", "Balance", etc.), or section titles as if they were accounts.
 - Mask account numbers to at most the last 4 characters.
 - latePaymentsLast24Months should count any 30/60/90+ day late marks that occurred STRICTLY within the last 24 months from the report date — meaning the mark must appear in a month that is 1 to 23 months before the report date. A mark from exactly 24 months before the report date (the same month two years prior) should NOT be counted; only months 1 through 23 months prior qualify.
+- Use the credit report's own report date as the anchor for that 24-month lookback. Example: if the report date is 2026-08-15, a late payment in 2024-08 is exactly 24 months old and must NOT be counted; only 2024-09 through 2026-07 qualify.
+- When you count any latePaymentsLast24Months, include the specific month/year evidence in lateHistoryNotes so the server and coach can verify the timing.
 - Count hard inquiries per bureau, and produce a best-effort estimate of unique inquiries (the same creditor pulling from multiple bureaus around the same date is usually one event, not three). For an Experian-only report, every inquiry counts toward "experian" and estimatedUniqueTotal is simply the count of distinct inquiry lines.
 
 Return a JSON object with this exact shape:
@@ -160,6 +163,112 @@ async function extractCreditReportData(extractedText: string): Promise<any> {
   }
 }
 
+function parseReportDateMonth(reportDate: string): Date | null {
+  const isoMatch = reportDate.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
+  if (isoMatch) {
+    return new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, 1);
+  }
+
+  const slashMatch = reportDate.match(/^(\d{1,2})\/\d{1,2}\/(\d{4})$/);
+  if (slashMatch) {
+    return new Date(Number(slashMatch[2]), Number(slashMatch[1]) - 1, 1);
+  }
+
+  const parsed = new Date(reportDate);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+}
+
+function monthsBetween(from: Date, to: Date): number {
+  return (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+}
+
+function parseLateHistoryMonths(notes: string | null | undefined): Date[] {
+  if (!notes) return [];
+  const dates: Date[] = [];
+  const seen = new Set<string>();
+  const monthNames: Record<string, number> = {
+    jan: 0,
+    january: 0,
+    feb: 1,
+    february: 1,
+    mar: 2,
+    march: 2,
+    apr: 3,
+    april: 3,
+    may: 4,
+    jun: 5,
+    june: 5,
+    jul: 6,
+    july: 6,
+    aug: 7,
+    august: 7,
+    sep: 8,
+    sept: 8,
+    september: 8,
+    oct: 9,
+    october: 9,
+    nov: 10,
+    november: 10,
+    dec: 11,
+    december: 11,
+  };
+
+  const addDate = (year: number, month: number) => {
+    if (year < 1900 || year > 2200 || month < 0 || month > 11) return;
+    const key = `${year}-${month}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    dates.push(new Date(year, month, 1));
+  };
+
+  let match: RegExpExecArray | null;
+  const monthYearPattern = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{4})\b/gi;
+  while ((match = monthYearPattern.exec(notes)) !== null) {
+    addDate(Number(match[2]), monthNames[match[1].toLowerCase()]);
+  }
+
+  const numericPattern = /\b(?:(\d{4})[-/](\d{1,2})|(\d{1,2})[-/](\d{4}))\b/g;
+  while ((match = numericPattern.exec(notes)) !== null) {
+    if (match[1] && match[2]) {
+      addDate(Number(match[1]), Number(match[2]) - 1);
+    } else if (match[3] && match[4]) {
+      addDate(Number(match[4]), Number(match[3]) - 1);
+    }
+  }
+
+  return dates;
+}
+
+function applyLatePaymentLookbackRule(account: CreditAccount, reportDate: string): CreditAccount {
+  const currentCount = account.latePaymentsLast24Months || 0;
+  if (currentCount <= 0) return account;
+
+  const reportMonth = parseReportDateMonth(reportDate);
+  if (!reportMonth) return account;
+
+  const evidenceDates = parseLateHistoryMonths(account.lateHistoryNotes);
+  if (evidenceDates.length === 0) return account;
+
+  const qualifyingDates = evidenceDates.filter(date => {
+    const ageMonths = monthsBetween(date, reportMonth);
+    return ageMonths >= 1 && ageMonths <= 23;
+  });
+
+  if (qualifyingDates.length === 0) {
+    return {
+      ...account,
+      latePaymentsLast24Months: 0,
+      lateHistoryNotes: `${account.lateHistoryNotes || ""} Excluded from 24-month rule: late-payment date evidence is exactly 24 months old or older from the report date.`.trim(),
+    };
+  }
+
+  return {
+    ...account,
+    latePaymentsLast24Months: Math.min(currentCount, qualifyingDates.length),
+  };
+}
+
 /**
  * Given raw applicant/business/accounts/inquiries data (either freshly extracted
  * or coach-corrected), deterministically recompute every derived field. This is
@@ -171,11 +280,23 @@ function buildCreditReportData(input: {
   reportDate: string;
   applicantScores: { experianScore: number | null; equifaxScore: number | null; transunionScore: number | null };
   businessAgeInput: string | null;
+  clientRequests?: string | null;
+  businessInformation?: string | null;
   rawAccounts: any[];
   inquiries: any;
   isReviewedAccounts?: boolean;
 }): CreditReportData {
-  const { clientName, reportDate, applicantScores, businessAgeInput, rawAccounts, inquiries, isReviewedAccounts } = input;
+  const {
+    clientName,
+    reportDate,
+    applicantScores,
+    businessAgeInput,
+    clientRequests,
+    businessInformation,
+    rawAccounts,
+    inquiries,
+    isReviewedAccounts,
+  } = input;
 
   const applicant = {
     clientName,
@@ -188,6 +309,8 @@ function buildCreditReportData(input: {
   const business = {
     businessAgeInput: businessAgeInput || null,
     businessAgeMonths: parseBusinessAgeMonths(businessAgeInput),
+    clientRequests: clientRequests || null,
+    businessInformation: businessInformation || null,
   };
 
   let accounts: any[];
@@ -208,6 +331,9 @@ function buildCreditReportData(input: {
     reviewAccounts = partitioned.reviewAccounts;
     extractionWarning = assessExtractionYield(accounts.length, reviewAccounts.length);
   }
+
+  accounts = accounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate));
+  reviewAccounts = reviewAccounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate));
 
   const inquiriesSummary = {
     items: Array.isArray(inquiries?.items) ? inquiries.items : [],
@@ -271,13 +397,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         coachNotes: req.body.coachNotes,
         consentConfirmed: req.body.consentConfirmed === "true" || req.body.consentConfirmed === true,
         businessAgeInput: req.body.businessAgeInput,
+        clientRequests: req.body.clientRequests,
+        businessInformation: req.body.businessInformation,
       });
 
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.errors[0]?.message || "Invalid request" });
       }
 
-      const { clientName, reportDate, coachNotes, consentConfirmed, businessAgeInput } = parsed.data;
+      const {
+        clientName,
+        reportDate,
+        coachNotes,
+        consentConfirmed,
+        businessAgeInput,
+        clientRequests,
+        businessInformation,
+      } = parsed.data;
 
       // 1. Extract raw text from the PDF
       const { text: extractedText, debug } = await parsePdfFile(file.buffer, file.originalname, file.mimetype);
@@ -303,6 +439,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reportDate,
         applicantScores: extraction.applicant || {},
         businessAgeInput: businessAgeInput || null,
+        clientRequests: clientRequests || null,
+        businessInformation: businessInformation || null,
         rawAccounts: extraction.accounts || [],
         inquiries: extraction.inquiries || {},
       });
@@ -354,6 +492,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reportDate: applicant.reportDate,
         applicantScores: applicant,
         businessAgeInput: business.businessAgeInput,
+        clientRequests: business.clientRequests,
+        businessInformation: business.businessInformation,
         rawAccounts: accounts,
         inquiries,
         isReviewedAccounts: true,
@@ -422,6 +562,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         reportDate: existing.reportDate,
         applicantScores: extraction.applicant || {},
         businessAgeInput: existingData?.business?.businessAgeInput ?? null,
+        clientRequests: existingData?.business?.clientRequests ?? null,
+        businessInformation: existingData?.business?.businessInformation ?? null,
         rawAccounts: extraction.accounts || [],
         inquiries: extraction.inquiries || {},
       });

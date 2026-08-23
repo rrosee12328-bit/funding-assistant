@@ -400,6 +400,52 @@ function buildStrengthsAndBarriers(categories: CategoryResult[]): { strengths: s
   return { strengths, barriers };
 }
 
+function buildFundingOptionsNotes(input: {
+  applicant: ApplicantProfile;
+  business: BusinessInfo;
+  categories: CategoryResult[];
+  overallStatus: FundingReadinessResult["overallStatus"];
+}): string[] {
+  const { applicant, business, categories, overallStatus } = input;
+  const scores = [applicant.experianScore, applicant.equifaxScore, applicant.transunionScore].filter(
+    (s): s is number => typeof s === "number"
+  );
+  const lowestScore = scores.length ? Math.min(...scores) : null;
+  const recentPaymentStatus = statusOf(categories, "Recent Payment History");
+  const bankruptcyStatus = statusOf(categories, "Bankruptcy");
+  const collectionStatus = statusOf(categories, "Collections and Charge-Offs");
+  const businessAgeStatus = statusOf(categories, "Business Age");
+
+  const businessFundingLimited =
+    overallStatus !== "Funding Ready" ||
+    business.businessAgeMonths === null ||
+    business.businessAgeMonths < 24 ||
+    businessAgeStatus !== "PASS";
+
+  const personalCreditMaySupportReview =
+    lowestScore !== null &&
+    lowestScore >= 680 &&
+    recentPaymentStatus !== "FAIL" &&
+    bankruptcyStatus !== "FAIL" &&
+    collectionStatus !== "FAIL";
+
+  if (businessFundingLimited && personalCreditMaySupportReview) {
+    return [
+      "Personal loan funding may be an option based on the applicant's personal-credit profile; verify lender requirements, income, DTI, and recent-payment-history timing before positioning it.",
+    ];
+  }
+
+  if (businessFundingLimited) {
+    return [
+      "Business funding may be limited by the current qualification profile; review personal-loan funding only if the applicant meets the lender's personal-credit, income, DTI, and recent-payment-history requirements.",
+    ];
+  }
+
+  return [
+    "Business funding is the primary path based on the current readiness profile; personal-loan funding can still be reviewed if the client requests alternate options.",
+  ];
+}
+
 export function evaluateFundingReadiness(input: {
   applicant: ApplicantProfile;
   business: BusinessInfo;
@@ -425,6 +471,7 @@ export function evaluateFundingReadiness(input: {
 
   const overallStatus = computeOverallStatus(categories);
   const { strengths, barriers } = buildStrengthsAndBarriers(categories);
+  const fundingOptionsNotes = buildFundingOptionsNotes({ applicant, business, categories, overallStatus });
 
-  return { overallStatus, categories, strengths, barriers };
+  return { overallStatus, categories, strengths, barriers, fundingOptionsNotes };
 }

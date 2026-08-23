@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -55,6 +56,8 @@ export default function ReviewData() {
   const [equifaxScore, setEquifaxScore] = useState<string>("");
   const [transunionScore, setTransunionScore] = useState<string>("");
   const [businessAgeInput, setBusinessAgeInput] = useState<string>("");
+  const [clientRequests, setClientRequests] = useState<string>("");
+  const [businessInformation, setBusinessInformation] = useState<string>("");
   const [accounts, setAccounts] = useState<CreditAccount[]>([]);
   const [initialized, setInitialized] = useState(false);
 
@@ -65,6 +68,8 @@ export default function ReviewData() {
       setEquifaxScore(data.applicant.equifaxScore?.toString() ?? "");
       setTransunionScore(data.applicant.transunionScore?.toString() ?? "");
       setBusinessAgeInput(data.business.businessAgeInput ?? "");
+      setClientRequests(data.business.clientRequests ?? "");
+      setBusinessInformation(data.business.businessInformation ?? "");
       setAccounts([...data.accounts, ...data.reviewAccounts]);
       setInitialized(true);
     }
@@ -133,6 +138,8 @@ export default function ReviewData() {
         business: {
           businessAgeInput: businessAgeInput || null,
           businessAgeMonths: null, // recomputed server-side from businessAgeInput
+          clientRequests: clientRequests || null,
+          businessInformation: businessInformation || null,
         },
         accounts,
         inquiries: data.inquiries,
@@ -217,6 +224,26 @@ export default function ReviewData() {
           <div className="space-y-2">
             <Label>Business Age</Label>
             <Input value={businessAgeInput} onChange={e => setBusinessAgeInput(e.target.value)} placeholder="e.g. 18 months" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Client Requests</Label>
+            <Textarea
+              value={clientRequests}
+              onChange={e => setClientRequests(e.target.value)}
+              placeholder="Requested funding amount, timeline, product type, or outcome."
+              className="min-h-28"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Business Information</Label>
+            <Textarea
+              value={businessInformation}
+              onChange={e => setBusinessInformation(e.target.value)}
+              placeholder="Business type, revenue, industry, entity status, bank statements, or other underwriting context."
+              className="min-h-28"
+            />
           </div>
         </div>
       </Card>

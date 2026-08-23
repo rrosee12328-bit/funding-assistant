@@ -54,6 +54,8 @@ export const processReportSchema = z.object({
   consentConfirmed: z.boolean().refine(val => val === true, "Must confirm consent"),
   // Manual business-age input (see BUSINESS AGE qualification standard)
   businessAgeInput: z.string().optional(), // free text, e.g. "18 months", "2 years", or a start date
+  clientRequests: z.string().optional(),
+  businessInformation: z.string().optional(),
 });
 export type ProcessReportRequest = z.infer<typeof processReportSchema>;
 
@@ -93,6 +95,8 @@ export type ApplicantProfile = z.infer<typeof applicantProfileSchema>;
 export const businessInfoSchema = z.object({
   businessAgeInput: z.string().nullable(), // raw text the coach typed in
   businessAgeMonths: z.number().nullable(), // parsed months, when derivable
+  clientRequests: z.string().nullable().default(null),
+  businessInformation: z.string().nullable().default(null),
 });
 export type BusinessInfo = z.infer<typeof businessInfoSchema>;
 
@@ -212,6 +216,7 @@ export const fundingReadinessResultSchema = z.object({
   categories: z.array(categoryResultSchema),
   strengths: z.array(z.string()).max(4),
   barriers: z.array(z.string()).max(6),
+  fundingOptionsNotes: z.array(z.string()).default([]),
 });
 export type FundingReadinessResult = z.infer<typeof fundingReadinessResultSchema>;
 
