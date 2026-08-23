@@ -165,7 +165,6 @@ export default function ReportDetails() {
                 <thead className="bg-white/5">
                   <tr>
                     <th className="p-4 text-left font-medium text-muted-foreground">Account</th>
-                    <th className="p-4 text-left font-medium text-muted-foreground">Account #</th>
                     <th className="p-4 text-left font-medium text-muted-foreground">Type</th>
                     <th className="p-4 text-left font-medium text-muted-foreground">Status</th>
                     <th className="p-4 text-left font-medium text-muted-foreground">Balance</th>
@@ -182,8 +181,12 @@ export default function ReportDetails() {
                         : "N/A";
                     return (
                       <tr key={acc.id} className="hover:bg-white/5 transition-colors">
-                        <td className="p-4 font-medium">{acc.creditorName}</td>
-                        <td className="p-4 font-mono text-muted-foreground whitespace-nowrap">{formatAccountNumber(acc.accountNumberMasked)}</td>
+                        <td className="p-4">
+                          <div className="font-medium">{acc.creditorName}</div>
+                          <div className="mt-1 font-mono text-xs text-muted-foreground">
+                            Acct # {formatAccountNumber(acc.accountNumberMasked)}
+                          </div>
+                        </td>
                         <td className="p-4 text-muted-foreground">{acc.accountType}</td>
                         <td className="p-4 text-muted-foreground">{acc.accountStatus}</td>
                         <td className="p-4">{acc.currentBalance !== null ? `$${acc.currentBalance.toLocaleString()}` : "N/A"}</td>
@@ -194,7 +197,7 @@ export default function ReportDetails() {
                   })}
                   {data.accounts.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="p-8 text-center text-muted-foreground">No accounts found.</td>
+                      <td colSpan={6} className="p-8 text-center text-muted-foreground">No accounts found.</td>
                     </tr>
                   )}
                 </tbody>
