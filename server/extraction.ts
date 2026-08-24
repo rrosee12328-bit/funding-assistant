@@ -174,6 +174,105 @@ export function computeAccountConfidence(account: Partial<CreditAccount>): numbe
 
 export const ACCOUNT_ACCEPTANCE_THRESHOLD = 60;
 
+function collapseRepeatedTokenSequence(value: string): string {
+  let current = value.replace(/\s+/g, " ").trim();
+
+  for (let pass = 0; pass < 3; pass++) {
+    const tokens = current.split(/\s+/).filter(Boolean);
+    if (tokens.length < 2) return current;
+
+    let collapsed = current;
+    for (let chunkSize = 1; chunkSize <= Math.floor(tokens.length / 2); chunkSize++) {
+      if (tokens.length % chunkSize !== 0) continue;
+      const isRepeated = tokens.every((_, index) => {
+        const chunkIndex = index % chunkSize;
+        return tokens[index].toLowerCase() === tokens[chunkIndex].toLowerCase();
+      });
+      if (isRepeated) {
+        collapsed = tokens.slice(0, chunkSize).join(" ");
+        break;
+      }
+    }
+
+    const adjacentCollapsed = collapsed
+      .split(/\s+/)
+      .filter((token, index, allTokens) => index === 0 || token.toLowerCase() !== allTokens[index - 1].toLowerCase())
+      .join(" ");
+
+    if (adjacentCollapsed === current) return current;
+    current = adjacentCollapsed;
+  }
+
+  return current;
+}
+
+const STATUS_PHRASES = [
+  "Over 120 Days Past Due",
+  "Pays as Agreed",
+  "Collection Account",
+  "Charged Off",
+  "Charge Off",
+  "Never Late",
+  "Past Due",
+  "Closed",
+  "Open",
+  "Current",
+  "Paid",
+  "N/A",
+  "Unknown",
+];
+
+function summarizeKnownStatusPhrases(value: string): string | null {
+  const matches: Array<{ index: number; end: number; phrase: string }> = [];
+
+  for (const phrase of STATUS_PHRASES) {
+    const escaped = phrase
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replace(/\\ /g, "\\s+");
+    const pattern = new RegExp(`\\b${escaped}\\b`, "gi");
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(value)) !== null) {
+      matches.push({ index: match.index, end: match.index + match[0].length, phrase });
+    }
+  }
+
+  if (matches.length === 0) return null;
+
+  const ordered = matches
+    .sort((a, b) => a.index - b.index || b.phrase.length - a.phrase.length)
+    .reduce<{ phrases: string[]; lastEnd: number }>((result, match) => {
+      if (match.index < result.lastEnd) return result;
+      const previous = result.phrases[result.phrases.length - 1];
+      if (previous?.toLowerCase() === match.phrase.toLowerCase()) return result;
+      result.phrases.push(match.phrase);
+      result.lastEnd = match.end;
+      return result;
+    }, { phrases: [], lastEnd: -1 })
+    .phrases;
+
+  const meaningful = ordered.filter(phrase => !/^(?:n\/a|unknown)$/i.test(phrase));
+  return (meaningful.length > 0 ? meaningful : ordered).join(" / ");
+}
+
+export function normalizeAccountStatus(status: string | null | undefined): string {
+  const raw = String(status || "").trim();
+  if (!raw) return "Unknown";
+
+  const withoutLabel = raw
+    .replace(/^(?:account\s+status|status|payment\s+status)\s*[:#\-–]?\s*/i, "")
+    .replace(/\bN\/A\b/gi, "N_A")
+    .replace(/\s*\/\s*/g, " ")
+    .replace(/\bN_A\b/g, "N/A")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const summarized = summarizeKnownStatusPhrases(withoutLabel);
+  if (summarized) return summarized;
+
+  const cleaned = collapseRepeatedTokenSequence(withoutLabel);
+  return cleaned || "Unknown";
+}
+
 /**
  * Normalize a raw AI-extracted account object into a well-formed CreditAccount,
  * filling in a stable id and safe defaults for anything missing.
@@ -201,7 +300,7 @@ export function normalizeAccount(raw: any): CreditAccount {
     creditorName: sanitizeCompanyCandidate(String(raw?.creditorName || raw?.accountName || "")),
     accountNumberMasked: maskAccountNumber(raw?.accountNumberMasked) || "N/A",
     accountType: accountType as any,
-    accountStatus: String(raw?.accountStatus || "Unknown"),
+    accountStatus: normalizeAccountStatus(raw?.accountStatus),
     openClosed: raw?.openClosed === "Open" || raw?.openClosed === "Closed" ? raw.openClosed : "Unknown",
     dateOpened: raw?.dateOpened ? String(raw.dateOpened) : null,
     accountAgeMonths: toNumberOrNull(raw?.accountAgeMonths),
@@ -209,7 +308,7 @@ export function normalizeAccount(raw: any): CreditAccount {
     creditLimitOrOriginalAmount: toNumberOrNull(raw?.creditLimitOrOriginalAmount),
     monthlyPayment: toNumberOrNull(raw?.monthlyPayment),
     pastDueAmount: toNumberOrNull(raw?.pastDueAmount),
-    paymentStatus: raw?.paymentStatus ? String(raw.paymentStatus) : null,
+    paymentStatus: raw?.paymentStatus ? normalizeAccountStatus(raw.paymentStatus) : null,
     latePaymentsLast24Months: typeof raw?.latePaymentsLast24Months === "number" ? raw.latePaymentsLast24Months : 0,
     lateHistoryNotes: raw?.lateHistoryNotes ? String(raw.lateHistoryNotes) : null,
     bureausReporting: bureaus,
@@ -358,7 +457,7 @@ function extractAccountStatus(blockText: string): string {
     .split("\n")
     .find(line => /^(?:account\s+status|status)\b/i.test(line) && !/^status\s+date\b/i.test(line));
   if (!statusLine) return "Unknown";
-  return statusLine.replace(/^(?:account\s+status|status)\s*/i, "").trim() || "Unknown";
+  return normalizeAccountStatus(statusLine);
 }
 
 function inferRecentLatePaymentCount(blockText: string): { count: number; notes: string | null } {

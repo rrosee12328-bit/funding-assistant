@@ -22,6 +22,7 @@ import {
   hasUsableAccountNumber,
   maskAccountNumber,
   normalizeNameKey,
+  normalizeAccountStatus,
 } from "./extraction";
 import {
   computeAccountSummary,
@@ -322,6 +323,31 @@ function mergeDeterministicAccountInputs(aiAccounts: any[], deterministicAccount
   return merged;
 }
 
+function normalizeAccountStatuses<T extends any>(accounts: T[]): T[] {
+  return (Array.isArray(accounts) ? accounts : []).map((account: any) => ({
+    ...account,
+    accountStatus: normalizeAccountStatus(account?.accountStatus),
+    paymentStatus: account?.paymentStatus ? normalizeAccountStatus(account.paymentStatus) : account?.paymentStatus ?? null,
+  }));
+}
+
+function cleanReportDataForResponse(reportData: any): any {
+  if (!reportData || typeof reportData !== "object") return reportData;
+
+  return {
+    ...reportData,
+    accounts: normalizeAccountStatuses(reportData.accounts || []),
+    reviewAccounts: normalizeAccountStatuses(reportData.reviewAccounts || []),
+  };
+}
+
+function cleanReportForResponse<T extends { reportData?: any }>(report: T): T {
+  return {
+    ...report,
+    reportData: cleanReportDataForResponse(report.reportData),
+  };
+}
+
 /**
  * Given raw applicant/business/accounts/inquiries data (either freshly extracted
  * or coach-corrected), deterministically recompute every derived field. This is
@@ -387,8 +413,8 @@ function buildCreditReportData(input: {
     extractionWarning = assessExtractionYield(accounts.length, reviewAccounts.length);
   }
 
-  accounts = accounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate));
-  reviewAccounts = reviewAccounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate));
+  accounts = normalizeAccountStatuses(accounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate)));
+  reviewAccounts = normalizeAccountStatuses(reviewAccounts.map((account: any) => applyLatePaymentLookbackRule(account, reportDate)));
 
   if (actualPublicRecordCount === 0) {
     accounts = accounts
@@ -445,7 +471,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!report) {
       return res.status(404).json({ message: "Report not found" });
     }
-    res.json(report);
+    res.json(cleanReportForResponse(report));
   });
 
   app.post(api.reports.process.path, upload.single("file"), async (req: Request, res: Response) => {
@@ -592,7 +618,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ message: "Report must be reviewed and finalized before generating the PDF." });
       }
 
-      generateAssessmentPdf(report.reportData as CreditReportData, report.coachNotes ?? null, res);
+      generateAssessmentPdf(cleanReportDataForResponse(report.reportData) as CreditReportData, report.coachNotes ?? null, res);
     } catch (error) {
       console.error("PDF generation error:", error);
       if (!res.headersSent) {
