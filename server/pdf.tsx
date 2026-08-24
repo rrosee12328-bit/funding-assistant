@@ -19,6 +19,7 @@ import type {
   CategoryResult,
   ReadinessStatus,
 } from "@shared/schema";
+import { normalizeAccountStatus } from "./extraction";
 
 // ---------------------------------------------------------------------------
 // Design tokens (mirroring the website's palette, adapted for print)
@@ -679,7 +680,7 @@ function AccountsTable({ data }: { data: CreditReportData }) {
               {acc.accountType}
             </Text>
             <Text style={[s.tableCellMuted, { width: COL.status }]}>
-              {acc.accountStatus}
+              {normalizeAccountStatus(acc.accountStatus)}
             </Text>
             <Text style={[s.tableCellMuted, { width: COL.opened }]}>
               {acc.dateOpened ?? "—"}
