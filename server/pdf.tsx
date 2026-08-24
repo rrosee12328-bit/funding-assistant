@@ -19,7 +19,6 @@ import type {
   CategoryResult,
   ReadinessStatus,
 } from "@shared/schema";
-import { normalizeAccountStatus } from "./extraction";
 
 // ---------------------------------------------------------------------------
 // Design tokens (mirroring the website's palette, adapted for print)
@@ -55,6 +54,73 @@ const C = {
   tableRowAlt: "#f8fafc",
   divider: "#e2e8f0",
 };
+
+const PDF_STATUS_PHRASES = [
+  "Over 120 Days Past Due",
+  "Pays as Agreed",
+  "Collection Account",
+  "Charged Off",
+  "Charge Off",
+  "Never Late",
+  "Past Due",
+  "Closed",
+  "Open",
+  "Current",
+  "Paid",
+  "N/A",
+  "Unknown",
+];
+
+function cleanPdfAccountStatus(status: string | null | undefined): string {
+  const raw = String(status || "").trim();
+  if (!raw) return "Unknown";
+
+  const value = raw
+    .replace(/^(?:account\s+status|status|payment\s+status)\s*[:#\-–]?\s*/i, "")
+    .replace(/\bN\/A\b/gi, "N_A")
+    .replace(/\s*\/\s*/g, " ")
+    .replace(/\bN_A\b/g, "N/A")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const matches: Array<{ index: number; end: number; phrase: string }> = [];
+  for (const phrase of PDF_STATUS_PHRASES) {
+    const escaped = phrase
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replace(/\\ /g, "\\s+");
+    const pattern = new RegExp(`\\b${escaped}\\b`, "gi");
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(value)) !== null) {
+      matches.push({ index: match.index, end: match.index + match[0].length, phrase });
+    }
+  }
+
+  if (matches.length > 0) {
+    const phrases = matches
+      .sort((a, b) => a.index - b.index || b.phrase.length - a.phrase.length)
+      .reduce<{ values: string[]; lastEnd: number }>((result, match) => {
+        if (match.index < result.lastEnd) return result;
+        const previous = result.values[result.values.length - 1];
+        if (previous?.toLowerCase() === match.phrase.toLowerCase()) return result;
+        result.values.push(match.phrase);
+        result.lastEnd = match.end;
+        return result;
+      }, { values: [], lastEnd: -1 })
+      .values;
+    const meaningful = phrases.filter(phrase => !/^(?:n\/a|unknown)$/i.test(phrase));
+    return (meaningful.length > 0 ? meaningful : phrases).join(" / ");
+  }
+
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length > 1 && words.length % 2 === 0) {
+    const half = words.length / 2;
+    const first = words.slice(0, half).join(" ").toLowerCase();
+    const second = words.slice(half).join(" ").toLowerCase();
+    if (first === second) return words.slice(0, half).join(" ");
+  }
+
+  return value;
+}
 
 const STATUS_COLORS: Record<
   ReadinessStatus,
@@ -680,7 +746,7 @@ function AccountsTable({ data }: { data: CreditReportData }) {
               {acc.accountType}
             </Text>
             <Text style={[s.tableCellMuted, { width: COL.status }]}>
-              {normalizeAccountStatus(acc.accountStatus)}
+              {cleanPdfAccountStatus(acc.accountStatus)}
             </Text>
             <Text style={[s.tableCellMuted, { width: COL.opened }]}>
               {acc.dateOpened ?? "—"}
